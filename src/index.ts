@@ -21,6 +21,35 @@ if (!fs.existsSync(WORKSPACE_DIR)) {
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 }
 
+// 워크스페이스 내부의 텍스트 기반 소스 파일들을 재귀적으로 수집하여 컨텍스트화
+function getWorkspaceContext(projectPath: string): { files: { path: string; content: string }[] } {
+  const result: { files: { path: string; content: string }[] } = { files: [] };
+  
+  function traverse(currentDir: string) {
+    if (!fs.existsSync(currentDir)) return;
+    const list = fs.readdirSync(currentDir);
+    for (const item of list) {
+      if (item === '.git' || item === 'node_modules' || item === 'dist' || item === '.DS_Store') continue;
+      const fullPath = path.join(currentDir, item);
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) {
+        traverse(fullPath);
+      } else if (stat.isFile()) {
+        const relativePath = path.relative(projectPath, fullPath);
+        try {
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          result.files.push({ path: relativePath, content });
+        } catch (e) {
+          // 바이너리 파일이나 읽을 수 없는 파일은 무시
+        }
+      }
+    }
+  }
+  
+  traverse(projectPath);
+  return result;
+}
+
 // 등록할 슬래시 커맨드 명세 정의
 const commands = [
   new SlashCommandBuilder()
@@ -41,10 +70,10 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('코딩')
-    .setDescription('Ollama를 호출하여 특정 소스 코드를 기획서 내용으로 수정합니다.')
+    .setDescription('Ollama를 통해 기획 명세 및 대화 내용을 분석해 자동으로 파일을 생성/수정합니다.')
     .addStringOption(option =>
-      option.setName('파일명')
-        .setDescription('대상 소스 파일 경로 (예: src/views/MainView.vue)')
+      option.setName('요청')
+        .setDescription('실행할 코딩 작업 지시 (예: 로그인 버튼 컴포넌트 추가)')
         .setRequired(true)
     ),
   new SlashCommandBuilder()
@@ -127,21 +156,9 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     return interaction.reply(`📝 기획 명세가 추가되었습니다. 전체 기획 아카이브는 프로젝트 내부 SPEC.md 파일에 영구 릴리즈됩니다.`);
   }
 
-  // [명령어 3] qwen2.5-coder 두뇌 가동 -> 파일 변조 (로컬 저장만 처리)
+  // [명령어 3] qwen2.5-coder 두뇌 가동 -> 자동 파일 생성 및 변조 (로컬 저장만 처리)
   if (commandName === '코딩') {
-    const fileName = interaction.options.getString('파일명', true).trim();
-    const filePath = path.join(session.project_path, fileName);
-
-    // 디렉토리가 존재하지 않는다면 파일 생성도 지원할 수 있도록, 폴더가 없으면 미리 만듬
-    const fileDir = path.dirname(filePath);
-    if (!fs.existsSync(fileDir)) {
-      fs.mkdirSync(fileDir, { recursive: true });
-    }
-
-    // 파일이 없으면 빈 파일 생성 (사용자가 신규 파일 코딩 요청도 할 수 있으므로)
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, '', 'utf-8');
-    }
+    const userRequest = interaction.options.getString('요청', true).trim();
 
     if (!session.spec_summary) {
       return interaction.reply('❌ 활성화된 기획 명세서가 부재합니다. 먼저 `/기획` 명령어로 프로젝트 골격을 설명해 주세요.');
@@ -151,16 +168,42 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     await interaction.deferReply();
 
     try {
-      // 1. 소스 코드 소싱
-      const currentCode = fs.readFileSync(filePath, 'utf-8');
+      // 1. 워크스페이스 내 모든 소스 파일 정보 수집
+      const workspaceContext = getWorkspaceContext(session.project_path);
 
-      // 2. 128K 롱컨텍스트 주입 및 코드 가공 생성
-      const updatedCode = await generateCodeUpdate(session.spec_summary, currentCode, fileName);
+      // 2. Ollama JSON 응답 호출
+      const changes = await generateCodeUpdate(session.spec_summary, workspaceContext, userRequest);
 
-      // 3. 파일 오버라이트 (수정 완료)
-      fs.writeFileSync(filePath, updatedCode, 'utf-8');
-      
-      await interaction.editReply(`✅ [${fileName}] 파일에 AI 코드 인젝션 완료!\n수정된 내용이 로컬 워크스페이스에 저장되었습니다. GitHub 원격 레포지토리에 커밋 및 반영하려면 \`/적용\` 명령을 입력해 주세요.`);
+      if (changes.length === 0) {
+        await interaction.editReply('ℹ️ Ollama 분석 결과, 변경해야 할 파일이 없습니다.');
+        return;
+      }
+
+      const updatedFiles: string[] = [];
+
+      // 3. 파일 쓰기 처리
+      for (const change of changes) {
+        const targetPath = path.resolve(session.project_path, change.path);
+        
+        // 경로 이탈 보안 방지 검사
+        if (!targetPath.startsWith(session.project_path)) {
+          console.warn(`[Security Warning] Blocked file write attempt outside workspace: ${change.path}`);
+          continue;
+        }
+
+        // 폴더 생성
+        const dirPath = path.dirname(targetPath);
+        if (!fs.existsSync(dirPath)) {
+          fs.mkdirSync(dirPath, { recursive: true });
+        }
+
+        // 파일 덮어쓰기
+        fs.writeFileSync(targetPath, change.content, 'utf-8');
+        updatedFiles.push(change.path);
+      }
+
+      const fileListStr = updatedFiles.map(f => `- \`${f}\``).join('\n');
+      await interaction.editReply(`✅ AI 코드 자동 인젝션 완료!\n다음 파일들이 생성/수정되어 로컬 워크스페이스에 저장되었습니다:\n${fileListStr}\n\nGitHub 원격 레포지토리에 반영하려면 \`/적용\` 명령을 입력해 주세요.`);
 
     } catch (error: any) {
       console.error(error);
