@@ -108,6 +108,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('앱삭제')
     .setDescription('현재 활성화된 개발 세션의 로컬 파일, GitHub 저장소 및 세션 정보를 영구 삭제합니다.')
+    .addStringOption(option =>
+      option.setName('앱이름')
+        .setDescription('삭제 확인을 위해 현재 세션의 앱 이름을 똑같이 입력하세요.')
+        .setRequired(true)
+    )
 ].map(command => command.toJSON());
 
 client.once('ready', async (readyClient) => {
@@ -267,6 +272,16 @@ client.on('interactionCreate', async (interaction: Interaction) => {
 
   // [명령어 5] 가상 세션 앱 말소 및 파일/원격 저장소 완전 삭제
   if (commandName === '앱삭제') {
+    const inputAppName = interaction.options.getString('앱이름', true).trim();
+
+    // 이중 확인 검사: 입력한 이름이 현재 세션의 앱 이름과 일치하는지 확인
+    if (inputAppName !== session.app_name) {
+      return interaction.reply({
+        content: `❌ 입력하신 앱 이름(\`${inputAppName}\`)이 현재 세션의 앱 이름(\`${session.app_name}\`)과 다릅니다. 삭제가 취소되었습니다.`,
+        ephemeral: true
+      });
+    }
+
     const gitToken = process.env.GIT_TOKEN;
     if (!gitToken) {
       return interaction.reply({
