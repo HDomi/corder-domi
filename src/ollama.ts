@@ -41,7 +41,7 @@ ${userRequest}
 `;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  const timeoutId = setTimeout(() => controller.abort(), 300000); // 1단계 파일 선별 타임아웃: 5분
 
   try {
     const response = await fetch(`${aiApiUrl}/api/chat`, {
@@ -142,9 +142,9 @@ ${userRequest}
 위 기획서와 워크스페이스 상태를 분석하고, 사용자의 코딩 요청을 완벽하게 반영한 파일 변경사항(JSON)을 생성해라.
 `;
 
-  // Ollama가 무한 루프에 빠지거나 멈추는 것을 방지하기 위해 90초 타임아웃 설정
+  // Ollama가 무한 루프에 빠지거나 멈추는 것을 방지하기 위해 15분 타임아웃 설정
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 90000);
+  const timeoutId = setTimeout(() => controller.abort(), 900000);
 
   try {
     const response = await fetch(`${cleanUrl}/api/chat`, {
