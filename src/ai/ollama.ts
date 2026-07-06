@@ -37,7 +37,8 @@ JSON 포맷 예시:
 2. "path"는 워크스페이스 루트 기준의 상대 경로입니다. (예: src/components/LoginButton.vue)
 3. "content"는 해당 파일의 '전체 소스 코드'입니다. 수정할 파일의 경우 일부가 아닌 전체 내용을 새로 덮어쓰므로 완벽한 전체 코드를 작성해야 합니다.
 4. 기존 Vue/React 프레임워크 규격, TypeScript 구조, 아키텍처 규칙을 훼손하지 마라.
-5. 완전히 새로운 애플리케이션이나 프로젝트 뼈대를 구성하는 작업인 경우, 단순히 src 디렉토리의 소스 코드뿐만 아니라 로컬 의존성 설치 및 빌드/런타임 실행이 즉시 가능하도록 필수적인 환경 설정 파일들(package.json, tsconfig.json, vite.config.ts, index.html, .gitignore, README.md 등)도 누락 없이 정교하게 완성된 코드 내용으로 함께 작성하여 결과물에 포함해라.`;
+5. 완전히 새로운 애플리케이션이나 프로젝트 뼈대를 구성하는 작업인 경우, 단순히 src 디렉토리의 소스 코드뿐만 아니라 로컬 의존성 설치 및 빌드/런타임 실행이 즉시 가능하도록 필수적인 환경 설정 파일들(package.json, tsconfig.json, vite.config.ts, index.html, .gitignore, README.md 등)도 누락 없이 정교하게 완성된 코드 내용으로 함께 작성하여 결과물에 포함해라.
+6. GitHub Pages 배포 환경을 고려하여, Vite 설정 파일(vite.config.js 또는 vite.config.ts)을 생성하거나 수정할 때는 상대 경로 매핑을 위해 base: "./" 설정을 반드시 추가하고, Vue CLI(vue.config.js)의 경우 publicPath: "./" 설정을 반드시 추가하며, Create React App(package.json)의 경우 "homepage": "." 설정을 추가하여 빌드 시 정적 리소스(JS, CSS 등)의 404 경로 에러(흰 화면)를 미연에 방지해라.`;
 
 export async function selectRelevantFilesOllama(
   aiApiUrl: string,
