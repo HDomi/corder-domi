@@ -17,12 +17,19 @@ export const coding: Command = {
         .setName("요청")
         .setDescription("실행할 코딩 작업 지시 (예: 로그인 버튼 컴포넌트 추가)")
         .setRequired(true),
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName("로컬모델사용")
+        .setDescription("로컬 모델(Ollama) 사용 여부 (True: Ollama, False: Gemini)")
+        .setRequired(false),
     ),
   requiresSession: true,
   requiresSpec: true,
   async execute(interaction: ChatInputCommandInteraction, session?: Session) {
     const currentSession = session!;
     const userRequest = interaction.options.getString("요청", true).trim();
+    const localModelOpt = interaction.options.getBoolean("로컬모델사용");
 
     // 디스코드는 3초 이내에 응답하지 않으면 타임아웃 에러가 발생하므로 디퍼 응답 상태로 전환합니다.
     await interaction.deferReply();
@@ -31,16 +38,17 @@ export const coding: Command = {
       // 1. 워크스페이스 내 모든 소스 파일 정보 수집
       const workspaceContext = getWorkspaceContext(currentSession.project_path);
 
-      // 2. Ollama JSON 응답 호출
+      // 2. AI 분석 응답 호출
       const changes = await generateCodeUpdate(
         currentSession.spec_summary,
         workspaceContext,
         userRequest,
+        localModelOpt !== null ? localModelOpt : undefined,
       );
 
       if (changes.length === 0) {
         await interaction.editReply(
-          `💻 **사용자 요청:** "${userRequest}"\n\nℹ️ Ollama 분석 결과, 변경해야 할 파일이 없습니다.`,
+          `💻 **사용자 요청:** "${userRequest}"\n\nℹ️ AI 분석 결과, 변경해야 할 파일이 없습니다.`,
         );
         return;
       }

@@ -8,12 +8,13 @@ export async function generateCodeUpdate(
   spec: string,
   workspaceContext: { files: { path: string; content: string }[] },
   userRequest: string,
+  localModelOverride?: boolean,
 ): Promise<FileChange[]> {
-  const isLocalMode = process.env.LOCAL_MODE === "true";
+  const isLocalMode = localModelOverride !== undefined ? localModelOverride : (process.env.LOCAL_MODE === "true");
   const geminiApiKey = process.env.GEMINI_API_KEY;
 
   const useLocal = isLocalMode || !geminiApiKey;
-  if (!isLocalMode && !geminiApiKey) {
+  if (localModelOverride === undefined && !isLocalMode && !geminiApiKey) {
     console.warn(
       "⚠️ GEMINI_API_KEY가 설정되어 있지 않아 로컬 모델(Ollama) 모드로 자동 전환합니다.",
     );
