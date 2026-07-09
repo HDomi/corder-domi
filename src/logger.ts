@@ -25,7 +25,7 @@ function writeToFile(level: string, message: string) {
     const logMessage = `[${getTimestamp()}] [${level}] ${message}\n`;
     fs.appendFileSync(LOG_FILE, logMessage, "utf-8");
   } catch (e) {
-    originalError("Failed to write log to file:", e);
+    originalError("로그 파일에 기록하는 데 실패했습니다:", e);
   }
 }
 
@@ -94,7 +94,7 @@ export function getOllamaLogs(lineCount: number = 100): string {
       const content = fs.readFileSync(envPath, "utf-8");
       return getTailLines(content, lineCount);
     } catch (e: any) {
-      console.error(`Failed to read OLLAMA_LOG_PATH (${envPath}):`, e.message);
+      console.error(`OLLAMA_LOG_PATH (${envPath}) 로그를 읽는데 실패했습니다:`, e.message);
     }
   }
 
@@ -108,7 +108,7 @@ export function getOllamaLogs(lineCount: number = 100): string {
       const content = fs.readFileSync(macDefaultPath, "utf-8");
       return getTailLines(content, lineCount);
     } catch (e: any) {
-      console.error(`Failed to read macOS default Ollama log:`, e.message);
+      console.error(`macOS 기본 Ollama 로그를 읽는데 실패했습니다:`, e.message);
     }
   }
 

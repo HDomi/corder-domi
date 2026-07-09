@@ -115,12 +115,12 @@ export function executeShellCommand(
 
     if (child.stdout) {
       child.stdout.on("data", (data) =>
-        console.log(`[shell-stdout] ${data.toString().trim()}`),
+        console.log(`[쉘-표준출력] ${data.toString().trim()}`),
       );
     }
     if (child.stderr) {
       child.stderr.on("data", (data) =>
-        console.error(`[shell-stderr] ${data.toString().trim()}`),
+        console.error(`[쉘-표준에러] ${data.toString().trim()}`),
       );
     }
   });

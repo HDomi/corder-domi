@@ -47,7 +47,7 @@ export async function setupAndPushRepo(
 
   if (repoResponse.status === 404) {
     // Repository does not exist, create it
-    console.log(`Repository ${repoName} does not exist. Creating...`);
+    console.log(`레포지토리 ${repoName}가 존재하지 않습니다. 새로 생성하는 중...`);
     const createResponse = await fetch("https://api.github.com/user/repos", {
       method: "POST",
       headers: {
@@ -110,7 +110,7 @@ export async function setupAndPushRepo(
   try {
     execSync("git push -u origin main", { cwd: projectPath });
   } catch (pushError: any) {
-    console.warn("Push failed, attempting force push...", pushError.message);
+    console.warn("푸시 실패, 강제 푸시(force push)를 시도합니다...", pushError.message);
     execSync("git push -u origin main --force", { cwd: projectPath });
   }
 
@@ -244,7 +244,7 @@ jobs:
   );
 
   if (repoResponse.status === 404) {
-    console.log(`Repository ${appName} does not exist. Creating with auto_init: true...`);
+    console.log(`레포지토리 ${appName}가 존재하지 않습니다. auto_init: true 옵션으로 새로 생성하는 중...`);
     const createResponse = await fetch("https://api.github.com/user/repos", {
       method: "POST",
       headers: {

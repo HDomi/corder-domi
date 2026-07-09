@@ -16,7 +16,7 @@ export async function generateCodeUpdate(
   let phase1Result: Phase1Result = { relevantFiles: [] };
 
   console.log(
-    `[Prompt Diet] 1단계: 의존 파일 선별 및 초기화 분석 시작... (전체 파일 수: ${workspaceContext.files.length}개 / 모드: Ollama)`,
+    `[컨텍스트 최적화] 1단계: 의존성 파일 선별 및 초기화 분석을 시작합니다... (전체 파일 수: ${workspaceContext.files.length}개 / 모드: Ollama)`,
   );
 
   try {
@@ -37,14 +37,27 @@ export async function generateCodeUpdate(
   // 1.5단계: 1단계에서 반환된 setupCommands 즉시 실행
   const runSetupCommands: string[] = [];
   if (phase1Result.setupCommands && phase1Result.setupCommands.length > 0) {
-    console.log(`[Phase 1 Setup] 실행할 초기화 명령어 발견: ${phase1Result.setupCommands.length}개`);
-    for (const cmd of phase1Result.setupCommands) {
+    const filteredSetup = phase1Result.setupCommands.filter(cmd => {
+      const forbidden = ["npm start", "npm run dev", "npm run start", "yarn start", "yarn dev", "pnpm start", "pnpm dev", "next dev", "next start"];
+      const isForbidden = forbidden.some(term => cmd.includes(term)) || (/\bvite\b/.test(cmd) && !/create-vite/.test(cmd));
+      if (isForbidden) {
+        console.warn(`⚠️ [검열 비상] 모델이 금지된 지속성 서버 명령어를 뱉어 실행을 차단했습니다: ${cmd}`);
+        return false;
+      }
+      return true;
+    });
+
+    if (filteredSetup.length > 0) {
+      console.log(`[1단계 사전 설정] 실행할 초기화 명령어 발견: ${filteredSetup.length}개`);
+      const chainedCmd = filteredSetup.join(" && ");
       try {
-        console.log(`[Phase 1 Setup] Executing: ${cmd}`);
-        await executeShellCommand(cmd, projectPath, abortSignal);
-        runSetupCommands.push(cmd);
+        console.log(`[1단계 사전 설정] 결합된 초기화 명령어 실행 중: ${chainedCmd}`);
+        await executeShellCommand(chainedCmd, projectPath, abortSignal);
+        for (const cmd of filteredSetup) {
+          runSetupCommands.push(cmd);
+        }
       } catch (err: any) {
-        console.error(`❌ [Phase 1 Setup Error] 명령어 실행 실패: ${cmd}`, err.message);
+        console.error(`❌ [1단계 사전 설정 오류] 명령어 실행 실패: ${chainedCmd}`, err.message);
         if (abortSignal?.aborted) {
           throw new Error("작업이 사용자에 의해 중단되었습니다.");
         }
@@ -74,10 +87,10 @@ export async function generateCodeUpdate(
   }
 
   console.log(
-    `[Prompt Diet] 2단계: 핵심 소스 코드 전송 시작... (다이어트 후 파일 수: ${prunedFiles.length}개 / ${allPaths.length}개 / 모드: Ollama)`,
+    `[컨텍스트 최적화] 2단계: 핵심 소스 코드 추출을 완료하여 모델에 전달합니다... (선별 파일 수: ${prunedFiles.length}개 / 전체 파일 수: ${allPaths.length}개 / 모드: Ollama)`,
   );
   console.log(
-    `[Prompt Diet] 전송할 파일 목록:\n${prunedFiles
+    `[컨텍스트 최적화] 모델 전송용 선별 파일 목록:\n${prunedFiles
       .map((f) => ` - ${f.path}`)
       .join("\n")}`,
   );

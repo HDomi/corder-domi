@@ -35,11 +35,11 @@ client.once("ready", async (readyClient) => {
     try {
       const rest = new REST({ version: "10" }).setToken(token);
       console.log(
-        `Started refreshing ${commandsJson.length} application (/) commands.`,
+        `${commandsJson.length}개의 애플리케이션 (/) 슬래시 커맨드 등록(갱신)을 시작합니다.`,
       );
       await rest.put(Routes.applicationCommands(clientId), { body: commandsJson });
       console.log(
-        `Successfully reloaded ${commandsJson.length} application (/) commands.`,
+        `성공적으로 ${commandsJson.length}개의 애플리케이션 (/) 슬래시 커맨드를 등록(갱신)했습니다.`,
       );
     } catch (error) {
       console.error("⚠️ 슬래시 커맨드 등록 중 오류 발생:", error);

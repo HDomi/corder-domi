@@ -186,16 +186,30 @@ class QueueManager {
         }
       }
 
-      // 2단계 실행 명령어를 /bin/bash 환경에서 순차 실행
+      // 2단계 실행 명령어를 /bin/bash 환경에서 한 번에 묶어서 실행 (cd 및 세션 상태 유지)
       if (result.execute && result.execute.length > 0) {
-        console.log(`[Queue Task] Running ${result.execute.length} execution commands...`);
-        for (const execObj of result.execute) {
+        const filteredExecute = result.execute.filter(execObj => {
+          const cmd = execObj.cmd;
+          const forbidden = ["npm start", "npm run dev", "npm run start", "yarn start", "yarn dev", "pnpm start", "pnpm dev", "next dev", "next start"];
+          const isForbidden = forbidden.some(term => cmd.includes(term)) || (/\bvite\b/.test(cmd) && !/create-vite/.test(cmd));
+          if (isForbidden) {
+            console.warn(`⚠️ [검열 비상] 모델이 금지된 지속성 서버 명령어를 뱉어 실행을 차단했습니다: ${cmd}`);
+            return false;
+          }
+          return true;
+        });
+
+        if (filteredExecute.length > 0) {
+          console.log(`[대기열 작업] ${filteredExecute.length}개의 실행 명령어를 실행합니다 (체인 구성)...`);
+          const chainedCmd = filteredExecute.map(execObj => execObj.cmd).join(" && ");
           if (controller.signal.aborted) {
             throw new Error("사용자에 의해 강제 종료되었습니다.");
           }
-          console.log(`[Queue Task] Executing bash command: ${execObj.cmd}`);
-          await executeShellCommand(execObj.cmd, item.session.project_path, controller.signal);
-          executedCommands.push(execObj);
+          console.log(`[대기열 작업] 결합된 bash 명령어들을 실행합니다:\n${chainedCmd}`);
+          await executeShellCommand(chainedCmd, item.session.project_path, controller.signal);
+          for (const execObj of filteredExecute) {
+            executedCommands.push(execObj);
+          }
         }
       }
 
@@ -204,7 +218,7 @@ class QueueManager {
       item.executedCommands = executedCommands;
       item.resultDesc = result.desc;
     } catch (error: any) {
-      console.error("❌ [Queue Task Error]", error);
+      console.error("❌ [대기열 작업 오류]", error);
       item.status = "error";
       item.completedAt = Date.now();
       item.errorMessage = error.message;
@@ -229,7 +243,7 @@ class QueueManager {
         await this.updateItemEmbed(item, queue);
       } catch (e) {
         // interaction이 만료된 경우 무시
-        console.warn("[Live Update] Embed 업데이트 실패 (무시됨):", e);
+        console.warn("[실시간 업데이트] Embed 업데이트 실패 (무시됨):", e);
       }
     }, 3000);
     this.liveTimers.set(channelId, timer);
