@@ -1,5 +1,6 @@
 import { Phase1Result, Phase2Result } from "./types";
 import { Agent } from "undici";
+import { AI_CONFIG } from "../config";
 
 export async function selectRelevantFilesOllama(
   aiApiUrl: string,
@@ -39,7 +40,7 @@ ${userRequest}
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "domi-coder-select",
+        model: AI_CONFIG.CODER_SELECT_MODEL,
         messages: [{ role: "user", content: userPrompt }],
         format: "json",
         options: { temperature: 0.0 },
@@ -148,7 +149,7 @@ ${userRequest}
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "domi-coder-update",
+        model: AI_CONFIG.CODER_UPDATE_MODEL,
         messages: [{ role: "user", content: userPrompt }],
         format: "json",
         options: { temperature: 0.1 },

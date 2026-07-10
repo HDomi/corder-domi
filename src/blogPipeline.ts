@@ -1,12 +1,10 @@
 import { Client, EmbedBuilder, TextChannel } from "discord.js";
 import { firebaseClient, BlogPost } from "./firebase";
 import { randomUUID } from "crypto";
-import * as dotenv from "dotenv";
+import { AI_CONFIG } from "./config";
 
-dotenv.config();
-
-const TEXT_MODEL = "Llama-3-Korean-Bllossom:8B";
-const EMBED_MODEL = "bge-m3";
+const TEXT_MODEL = AI_CONFIG.BLOG_TEXT_MODEL;
+const EMBED_MODEL = AI_CONFIG.BLOG_EMBED_MODEL;
 
 // KST 시간대 ISO 스트링 생성기
 function getKstTimeString(): string {
