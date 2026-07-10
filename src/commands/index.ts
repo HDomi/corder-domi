@@ -10,6 +10,8 @@ import { deploy } from "./deploy";
 import { uptime } from "./uptime";
 import { forceStop } from "./forceStop";
 import { clearChat } from "./clearChat";
+import { posting } from "./posting";
+import { autoPosting } from "./autoPosting";
 import { Command } from "../types";
 
 export const commands: Command[] = [
@@ -25,4 +27,6 @@ export const commands: Command[] = [
   uptime,
   forceStop,
   clearChat,
+  posting,
+  autoPosting,
 ];

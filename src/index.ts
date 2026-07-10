@@ -9,6 +9,7 @@ import * as dotenv from "dotenv";
 import { dbManager } from "./db";
 import { initLogger } from "./logger";
 import { commands } from "./commands";
+import { initScheduler } from "./scheduler";
 
 dotenv.config();
 
@@ -49,6 +50,9 @@ client.once("ready", async (readyClient) => {
       "⚠️ DISCORD_TOKEN 또는 CLIENT_ID가 .env에 설정되지 않아 슬래시 커맨드를 등록할 수 없습니다.",
     );
   }
+
+  // 블로그 자동 포스팅 스케줄러 가동
+  initScheduler(readyClient);
 });
 
 client.on("interactionCreate", async (interaction: Interaction) => {
