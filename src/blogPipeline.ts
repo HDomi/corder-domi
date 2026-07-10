@@ -3,6 +3,7 @@ import { firebaseClient, BlogPost } from "./firebase";
 import { randomUUID } from "crypto";
 import { AI_CONFIG } from "./config";
 import { executeWithOllamaLock } from "./ai/lock";
+import { triggerBlogDeploy } from "./git";
 
 const TEXT_MODEL = AI_CONFIG.BLOG_TEXT_MODEL;
 const EMBED_MODEL = AI_CONFIG.BLOG_EMBED_MODEL;
@@ -308,6 +309,9 @@ JSON 형식:
 
   await firebaseClient.savePost(newPost);
 
+  // 5.5 GitHub Repository Dispatch를 통해 정적 블로그 사이트 자동 빌드 및 배포 트리거
+  const deployTriggered = await triggerBlogDeploy();
+
   // 6. 디스코드 알림 발송
   const announceChannelId = targetChannelId || process.env.DISCORD_BLOG_CHANNEL_ID;
   if (discordClient && announceChannelId) {
@@ -327,6 +331,12 @@ JSON 형식:
             },
             { name: "🆔 UUID", value: `\`${newPost.uuid}\``, inline: true },
             { name: "🕒 작성시간", value: newPost.createdAt, inline: true },
+            {
+              name: "🚀 정적 사이트 배포",
+              value: deployTriggered
+                ? "🟢 GitHub Actions 자동 배포 트리거됨 (3~5분 소요)"
+                : "🔴 GitHub Actions 배포 트리거 실패 또는 건너뜀",
+            },
           )
           .setTimestamp();
 

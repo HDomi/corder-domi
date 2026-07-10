@@ -1,6 +1,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { AI_CONFIG } from "./config";
 
 interface GitHubUser {
   login: string;
@@ -340,5 +341,47 @@ export async function deleteRemoteRepo(appName: string, gitToken: string): Promi
   if (deleteResponse.status !== 204 && deleteResponse.status !== 404) {
     const errorText = await deleteResponse.text();
     throw new Error(`GitHub 레포지토리 삭제 실패: ${deleteResponse.statusText} (${errorText})`);
+  }
+}
+
+export async function triggerBlogDeploy(): Promise<boolean> {
+  const gitToken = process.env.GIT_TOKEN;
+  if (!gitToken) {
+    console.warn("⚠️ 환경변수 GIT_TOKEN이 누락되어 GitHub Pages 배포 트리거를 건너뜁니다.");
+    return false;
+  }
+
+  const owner = AI_CONFIG.GITHUB_OWNER;
+  const repo = AI_CONFIG.GITHUB_REPO;
+
+  console.log(
+    `🚀 [GitHub API] ${owner}/${repo} 레포지토리의 배포 트리거(Repository Dispatch)를 호출합니다...`,
+  );
+
+  try {
+    const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${gitToken}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "coder-domi-bot",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({
+        event_type: "deploy_trigger",
+      }),
+    });
+
+    if (response.ok) {
+      console.log(`✅ [GitHub API] ${owner}/${repo} 배포 트리거 완료!`);
+      return true;
+    } else {
+      const errorText = await response.text();
+      console.error(`❌ [GitHub API] 배포 트리거 실패: ${response.statusText} (${errorText})`);
+      return false;
+    }
+  } catch (error: any) {
+    console.error(`❌ [GitHub API] 배포 트리거 요청 오류:`, error.message);
+    return false;
   }
 }
