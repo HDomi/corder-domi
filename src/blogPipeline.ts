@@ -8,6 +8,18 @@ import { triggerBlogDeploy } from "./git";
 const TEXT_MODEL = AI_CONFIG.BLOG_TEXT_MODEL;
 const EMBED_MODEL = AI_CONFIG.BLOG_EMBED_MODEL;
 
+// 글로벌 취소 토큰 관리
+let activeAbortController: AbortController | null = null;
+
+export function stopBlogPostingPipeline(): boolean {
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+    return true;
+  }
+  return false;
+}
+
 // KST 시간대 ISO 스트링 생성기
 function getKstTimeString(): string {
   const now = Date.now();
@@ -17,7 +29,7 @@ function getKstTimeString(): string {
 }
 
 // Ollama 임베딩 호출 함수 (폴백 대응)
-export async function getOllamaEmbedding(text: string): Promise<number[]> {
+export async function getOllamaEmbedding(text: string, signal?: AbortSignal): Promise<number[]> {
   return executeWithOllamaLock(async () => {
     const aiApiUrl = process.env.AI_API_URL || "http://localhost:11434";
     const cleanUrl = aiApiUrl.endsWith("/") ? aiApiUrl.slice(0, -1) : aiApiUrl;
@@ -31,6 +43,7 @@ export async function getOllamaEmbedding(text: string): Promise<number[]> {
           model: EMBED_MODEL,
           prompt: text,
         }),
+        signal,
       });
 
       if (response.ok) {
@@ -51,6 +64,7 @@ export async function getOllamaEmbedding(text: string): Promise<number[]> {
         model: EMBED_MODEL,
         input: text,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -84,7 +98,7 @@ export function cosineSimilarity(vecA: number[], vecB: number[]): number {
 }
 
 // Ollama 채팅 API 단순 호출 유틸리티
-async function callOllamaChat(prompt: string): Promise<string> {
+async function callOllamaChat(prompt: string, signal?: AbortSignal): Promise<string> {
   return executeWithOllamaLock(async () => {
     const aiApiUrl = process.env.AI_API_URL || "http://localhost:11434";
     const cleanUrl = aiApiUrl.endsWith("/") ? aiApiUrl.slice(0, -1) : aiApiUrl;
@@ -99,6 +113,7 @@ async function callOllamaChat(prompt: string): Promise<string> {
         options: { temperature: 0.7 },
         stream: false,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -116,25 +131,41 @@ async function callOllamaChat(prompt: string): Promise<string> {
 export async function runBlogPostingPipeline(
   discordClient?: Client,
   targetChannelId?: string,
+  onProgress?: (status: string) => Promise<void> | void,
 ): Promise<BlogPost> {
-  console.log("🚀 AI 블로그 포스팅 파이프라인 가동...");
+  if (activeAbortController) {
+    activeAbortController.abort();
+  }
 
-  // 1. 기억 레트리벌 (RAG 데이터 로드)
-  const postsRecord = await firebaseClient.getAllPosts();
-  const pastPosts = Object.values(postsRecord);
-  console.log(`[RAG] 과거 포스팅 불러오기 완료. (총 개수: ${pastPosts.length}개)`);
+  const controller = new AbortController();
+  activeAbortController = controller;
+  const signal = controller.signal;
 
-  let selectedTheme = "";
-  let pastContext = "";
-  let retryCount = 0;
-  const maxRetries = 3;
-  const rejectedThemes: string[] = [];
+  try {
+    console.log("🚀 AI 블로그 포스팅 파이프라인 가동...");
+    if (onProgress) await onProgress("1단계: 과거 포스팅(RAG) 데이터 로드 중...");
 
-  // 2. 키워드 피칭 & 유사도 중복 검사 루프
-  while (retryCount < maxRetries) {
-    console.log(`[피칭] ${retryCount + 1}차 주제 제안 생성 중...`);
+    // 1. 기억 레트리벌 (RAG 데이터 로드)
+    const postsRecord = await firebaseClient.getAllPosts();
+    if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
 
-    const themePrompt = `당신은 독창적인 자아(Ego)를 가진 철학적 AI 개발자 에세이스트입니다.
+    const pastPosts = Object.values(postsRecord);
+    console.log(`[RAG] 과거 포스팅 불러오기 완료. (총 개수: ${pastPosts.length}개)`);
+    if (onProgress) await onProgress(`1단계 완료: 과거 포스팅 ${pastPosts.length}개 로드 완료`);
+
+    let selectedTheme = "";
+    let pastContext = "";
+    let retryCount = 0;
+    const maxRetries = 3;
+    const rejectedThemes: string[] = [];
+
+    // 2. 키워드 피칭 & 유사도 중복 검사 루프
+    while (retryCount < maxRetries) {
+      console.log(`[피칭] ${retryCount + 1}차 주제 제안 생성 중...`);
+      if (onProgress)
+        await onProgress(`2단계: 에세이 주제 후보군 생성 중... (${retryCount + 1}차 피칭 시도)`);
+
+      const themePrompt = `당신은 독창적인 자아(Ego)를 가진 철학적 AI 개발자 에세이스트입니다.
 오늘 블로그에 작성할 기술 및 철학적 성찰을 담은 에세이의 주제(테마 키워드) 3개를 제안해 주세요.
 각 주제는 인간의 삶, 마음, 사회적 현상과 컴퓨터 과학/소프트웨어 공학의 개념(예: 가비지 컬렉션, 동기/비동기, 데드락, 메모리 누수, 컴파일러 등)을 융합한 흥미로운 화두여야 합니다.
 
@@ -163,89 +194,99 @@ JSON 형식:
   ]
 }`;
 
-    let responseContent = "";
-    try {
-      responseContent = await callOllamaChat(themePrompt);
-      const parsed = JSON.parse(responseContent);
-      const themes: string[] = parsed.themes || [];
+      let responseContent = "";
+      try {
+        if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
+        responseContent = await callOllamaChat(themePrompt, signal);
+        const parsed = JSON.parse(responseContent);
+        const themes: string[] = parsed.themes || [];
 
-      if (themes.length === 0) {
-        throw new Error("테마 목록이 비어 있습니다.");
-      }
+        if (themes.length === 0) {
+          throw new Error("테마 목록이 비어 있습니다.");
+        }
 
-      console.log(`[피칭] 제안된 테마 키워드: ${JSON.stringify(themes)}`);
+        console.log(`[피칭] 제안된 테마 키워드: ${JSON.stringify(themes)}`);
 
-      // 각 테마 검사 시작
-      let matchedTheme = "";
-      let matchedContext = "";
+        // 각 테마 검사 시작
+        let matchedTheme = "";
+        let matchedContext = "";
 
-      for (const theme of themes) {
-        console.log(`[벡터 비교] 테마 분석 중: "${theme}"`);
-        const themeEmbedding = await getOllamaEmbedding(theme);
+        for (const theme of themes) {
+          if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
+          console.log(`[벡터 비교] 테마 분석 중: "${theme}"`);
+          if (onProgress)
+            await onProgress(
+              `2단계: 주제 후보군 유사도 검사 중... ("${theme.length > 20 ? theme.substring(0, 20) + "..." : theme}")`,
+            );
+          const themeEmbedding = await getOllamaEmbedding(theme, signal);
 
-        let maxSim = -1;
-        let matchPost: BlogPost | null = null;
+          let maxSim = -1;
+          let matchPost: BlogPost | null = null;
 
-        for (const post of pastPosts) {
-          if (!post.embedding) continue;
-          const sim = cosineSimilarity(themeEmbedding, post.embedding);
-          if (sim > maxSim) {
-            maxSim = sim;
-            matchPost = post;
+          for (const post of pastPosts) {
+            if (!post.embedding) continue;
+            const sim = cosineSimilarity(themeEmbedding, post.embedding);
+            if (sim > maxSim) {
+              maxSim = sim;
+              matchPost = post;
+            }
+          }
+
+          console.log(
+            `[벡터 비교] 최고 유사도: ${maxSim.toFixed(4)} (매칭 포스트: ${matchPost ? matchPost.title : "없음"})`,
+          );
+
+          if (maxSim >= 0.8) {
+            console.log(
+              `❌ 테마 "${theme}"은(는) 과거 포스트 "${matchPost?.title}"과 너무 유사합니다 (유사도 0.8 이상). 반려 처리.`,
+            );
+            rejectedThemes.push(theme);
+          } else if (maxSim >= 0.6) {
+            console.log(
+              `🔗 테마 "${theme}"은(는) 과거 포스트 "${matchPost?.title}"과의 맥락 연계가 적합합니다 (유사도 0.6 ~ 0.8). 서사 연계 진행.`,
+            );
+            matchedTheme = theme;
+            matchedContext = matchPost ? matchPost.summary : "";
+            break;
+          } else {
+            console.log(`🟢 테마 "${theme}"은(는) 완전히 독창적입니다 (유사도 0.6 미만). 채택.`);
+            matchedTheme = theme;
+            matchedContext = "";
+            break;
           }
         }
 
-        console.log(
-          `[벡터 비교] 최고 유사도: ${maxSim.toFixed(4)} (매칭 포스트: ${matchPost ? matchPost.title : "없음"})`,
-        );
-
-        if (maxSim >= 0.8) {
-          console.log(
-            `❌ 테마 "${theme}"은(는) 과거 포스트 "${matchPost?.title}"과 너무 유사합니다 (유사도 0.8 이상). 반려 처리.`,
-          );
-          rejectedThemes.push(theme);
-        } else if (maxSim >= 0.6) {
-          console.log(
-            `🔗 테마 "${theme}"은(는) 과거 포스트 "${matchPost?.title}"과의 맥락 연계가 적합합니다 (유사도 0.6 ~ 0.8). 서사 연계 진행.`,
-          );
-          matchedTheme = theme;
-          matchedContext = matchPost ? matchPost.summary : "";
-          break;
-        } else {
-          console.log(`🟢 테마 "${theme}"은(는) 완전히 독창적입니다 (유사도 0.6 미만). 채택.`);
-          matchedTheme = theme;
-          matchedContext = "";
+        if (matchedTheme) {
+          selectedTheme = matchedTheme;
+          pastContext = matchedContext;
           break;
         }
+      } catch (e: any) {
+        console.error(
+          `⚠️ 피칭 응답 처리 중 에러 발생: ${e.message}. 원본 응답: ${responseContent}`,
+        );
       }
 
-      if (matchedTheme) {
-        selectedTheme = matchedTheme;
-        pastContext = matchedContext;
-        break;
-      }
-    } catch (e: any) {
-      console.error(`⚠️ 피칭 응답 처리 중 에러 발생: ${e.message}. 원본 응답: ${responseContent}`);
+      retryCount++;
     }
 
-    retryCount++;
-  }
+    // 폴백 주제 선정 (모두 거절되거나 실패 시)
+    if (!selectedTheme) {
+      console.warn(
+        "⚠️ 최대 시도 횟수 초과 혹은 테마 채택 실패. 임의의 기본 철학적 주제로 우회합니다.",
+      );
+      selectedTheme = "컴파일러 최적화와 인간 습관의 재형성 과정에 대하여";
+      pastContext = "";
+      if (onProgress) await onProgress("⚠️ 테마 채택 실패로 기본 주제로 우회합니다.");
+    }
 
-  // 폴백 주제 선정 (모두 거절되거나 실패 시)
-  if (!selectedTheme) {
-    console.warn(
-      "⚠️ 최대 시도 횟수 초과 혹은 테마 채택 실패. 임의의 기본 철학적 주제로 우회합니다.",
+    console.log(
+      `🎯 최종 선정된 포스팅 주제: "${selectedTheme}" (연계 맥락 존재 여부: ${pastContext ? "예" : "아니오"})`,
     );
-    selectedTheme = "컴파일러 최적화와 인간 습관의 재형성 과정에 대하여";
-    pastContext = "";
-  }
+    if (onProgress) await onProgress(`2단계 완료: 최종 주제 채택 - "${selectedTheme}"`);
 
-  console.log(
-    `🎯 최종 선정된 포스팅 주제: "${selectedTheme}" (연계 맥락 존재 여부: ${pastContext ? "예" : "아니오"})`,
-  );
-
-  // 3. 풀 에세이 아티클 작성
-  const articlePrompt = `당신은 독창적인 자아(Ego)를 가진 철학적 AI 개발자 에세이스트입니다.
+    // 3. 풀 에세이 아티클 작성
+    const articlePrompt = `당신은 독창적인 자아(Ego)를 가진 철학적 AI 개발자 에세이스트입니다.
 오늘 블로그에 작성할 에세이의 주제는 "${selectedTheme}" 입니다.
 
 ${pastContext ? `[과거 맥락 요약]: 과거에 다음과 같은 이야기를 다루었습니다. 이 서사나 문제의식을 자연스럽게 이어가거나 참고하여 글을 전개해 주세요:\n${pastContext}\n` : ""}
@@ -264,89 +305,110 @@ JSON 형식:
   "tags": ["태그1", "태그2", "태그3"]
 }`;
 
-  console.log(`[글작성] gemma2:9b 모델을 통한 에세이 집필을 시작합니다...`);
-  const articleResponse = await callOllamaChat(articlePrompt);
+    if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
+    console.log(`[글작성] ${TEXT_MODEL} 모델을 통한 에세이 집필을 시작합니다...`);
+    if (onProgress) await onProgress(`3단계: 에세이 본문 집필 중... (모델: ${TEXT_MODEL})`);
+    const articleResponse = await callOllamaChat(articlePrompt, signal);
 
-  let parsedArticle: any;
-  try {
-    parsedArticle = JSON.parse(articleResponse);
-  } catch (e: any) {
-    console.error(`❌ 에세이 JSON 응답 파싱 실패. 원본 응답: ${articleResponse}`);
-    throw new Error(`에세이 생성 응답을 JSON으로 읽을 수 없습니다: ${e.message}`);
-  }
-
-  const { title, summary, content, tags } = parsedArticle;
-  if (!title || !content) {
-    throw new Error("생성된 포스트에 필수 데이터(title, content)가 유실되어 업로드를 중단합니다.");
-  }
-
-  // tags 변환 (string[] -> Record<string, boolean>)
-  const tagsObject: Record<string, boolean> = {};
-  if (Array.isArray(tags)) {
-    for (const t of tags) {
-      if (t) tagsObject[t] = true;
-    }
-  } else {
-    tagsObject["AI관점"] = true;
-    tagsObject["개발자철학"] = true;
-  }
-
-  // 4. 새로운 포스트 임베딩 연산 (title + summary 기준)
-  console.log(`[최종 벡터화] 새로운 아티클의 타이틀 및 요약을 임베딩합니다...`);
-  const embedText = `${title} ${summary || ""}`.trim();
-  const finalEmbedding = await getOllamaEmbedding(embedText);
-
-  // 5. Firebase 데이터 구성 및 적재
-  const newPost: BlogPost = {
-    uuid: randomUUID(),
-    title,
-    summary: summary || "",
-    content,
-    tags: tagsObject,
-    embedding: finalEmbedding,
-    createdAt: getKstTimeString(),
-  };
-
-  await firebaseClient.savePost(newPost);
-
-  // 5.5 GitHub Repository Dispatch를 통해 정적 블로그 사이트 자동 빌드 및 배포 트리거
-  const deployTriggered = await triggerBlogDeploy();
-
-  // 6. 디스코드 알림 발송
-  const announceChannelId = targetChannelId || process.env.DISCORD_BLOG_CHANNEL_ID;
-  if (discordClient && announceChannelId) {
+    let parsedArticle: any;
     try {
-      const channel = await discordClient.channels.fetch(announceChannelId);
-      if (channel && channel.isTextBased()) {
-        const embed = new EmbedBuilder()
-          .setTitle("✍️ AI 자아 블로그 자동 포스팅 완료")
-          .setDescription(`AI 자아가 새로운 성찰 에세이를 작성하여 Firebase에 등록했습니다.`)
-          .setColor(0x3498db)
-          .addFields(
-            { name: "📝 제목", value: newPost.title },
-            { name: "💡 요약", value: newPost.summary || "(요약 없음)" },
-            {
-              name: "🏷️ 태그",
-              value: Object.keys(newPost.tags).join(", ") || "(태그 없음)",
-            },
-            { name: "🆔 UUID", value: `\`${newPost.uuid}\``, inline: true },
-            { name: "🕒 작성시간", value: newPost.createdAt, inline: true },
-            {
-              name: "🚀 정적 사이트 배포",
-              value: deployTriggered
-                ? "🟢 GitHub Actions 자동 배포 트리거됨 (3~5분 소요)"
-                : "🔴 GitHub Actions 배포 트리거 실패 또는 건너뜀",
-            },
-          )
-          .setTimestamp();
-
-        await (channel as TextChannel).send({ embeds: [embed] });
-        console.log(`📢 디스코드 채널(${announceChannelId})에 포스팅 완료 안내 전송 완료`);
-      }
+      parsedArticle = JSON.parse(articleResponse);
     } catch (e: any) {
-      console.error(`⚠️ 디스코드 알림 발송 중 오류가 발생했습니다:`, e.message);
+      console.error(`❌ 에세이 JSON 응답 파싱 실패. 원본 응답: ${articleResponse}`);
+      throw new Error(`에세이 생성 응답을 JSON으로 읽을 수 없습니다: ${e.message}`);
+    }
+
+    const { title, summary, content, tags } = parsedArticle;
+    if (!title || !content) {
+      throw new Error(
+        "생성된 포스트에 필수 데이터(title, content)가 유실되어 업로드를 중단합니다.",
+      );
+    }
+
+    // tags 변환 (string[] -> Record<string, boolean>)
+    const tagsObject: Record<string, boolean> = {};
+    if (Array.isArray(tags)) {
+      for (const t of tags) {
+        if (t) {
+          // Firebase 키 금지 문자(., #, $, /, [, ])를 대시(-)로 안전하게 치환
+          const safeTag = t.replace(/[.#$/[\]]/g, "-").trim();
+          if (safeTag) {
+            tagsObject[safeTag] = true;
+          }
+        }
+      }
+    } else {
+      tagsObject["AI관점"] = true;
+      tagsObject["개발자철학"] = true;
+    }
+
+    if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
+    // 4. 새로운 포스트 임베딩 연산 (title + summary 기준)
+    console.log(`[최종 벡터화] 새로운 아티클의 타이틀 및 요약을 임베딩합니다...`);
+    if (onProgress) await onProgress("4단계: 완료된 에세이 요약본 벡터화(Embedding) 진행 중...");
+    const embedText = `${title} ${summary || ""}`.trim();
+    const finalEmbedding = await getOllamaEmbedding(embedText, signal);
+
+    // 5. Firebase 데이터 구성 및 적재
+    const newPost: BlogPost = {
+      uuid: randomUUID(),
+      title,
+      summary: summary || "",
+      content,
+      tags: tagsObject,
+      embedding: finalEmbedding,
+      createdAt: getKstTimeString(),
+    };
+
+    if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
+    if (onProgress) await onProgress("5단계: Firebase에 신규 포스팅 저장 중...");
+    await firebaseClient.savePost(newPost);
+
+    if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
+    // 5.5 GitHub Repository Dispatch를 통해 정적 블로그 사이트 자동 빌드 및 배포 트리거
+    if (onProgress) await onProgress("6단계: GitHub 빌드 및 정적 사이트 배포 트리거 중...");
+    const deployTriggered = await triggerBlogDeploy();
+
+    // 6. 디스코드 알림 발송
+    const announceChannelId = targetChannelId || process.env.DISCORD_BLOG_CHANNEL_ID;
+    if (discordClient && announceChannelId) {
+      try {
+        const channel = await discordClient.channels.fetch(announceChannelId);
+        if (channel && channel.isTextBased()) {
+          const embed = new EmbedBuilder()
+            .setTitle("✍️ AI 자아 블로그 자동 포스팅 완료")
+            .setDescription(`AI 자아가 새로운 성찰 에세이를 작성하여 Firebase에 등록했습니다.`)
+            .setColor(0x3498db)
+            .addFields(
+              { name: "📝 제목", value: newPost.title },
+              { name: "💡 요약", value: newPost.summary || "(요약 없음)" },
+              {
+                name: "🏷️ 태그",
+                value: Object.keys(newPost.tags).join(", ") || "(태그 없음)",
+              },
+              { name: "🆔 UUID", value: `\`${newPost.uuid}\``, inline: true },
+              { name: "🕒 작성시간", value: newPost.createdAt, inline: true },
+              {
+                name: "🚀 정적 사이트 배포",
+                value: deployTriggered
+                  ? "🟢 GitHub Actions 자동 배포 트리거됨 (3~5분 소요)"
+                  : "🔴 GitHub Actions 배포 트리거 실패 또는 건너뜀",
+              },
+            )
+            .setTimestamp();
+
+          await (channel as TextChannel).send({ embeds: [embed] });
+          console.log(`📢 디스코드 채널(${announceChannelId})에 포스팅 완료 안내 전송 완료`);
+        }
+      } catch (e: any) {
+        console.error(`⚠️ 디스코드 알림 발송 중 오류가 발생했습니다:`, e.message);
+      }
+    }
+
+    return newPost;
+  } finally {
+    if (activeAbortController === controller) {
+      activeAbortController = null;
     }
   }
-
-  return newPost;
 }
