@@ -4,7 +4,6 @@ export const AI_CONFIG = {
   CODER_UPDATE_MODEL: "domi-coder-update",
 
   // 블로그 포스팅 에세이스트용 모델
-  BLOG_TEXT_MODEL: "domi-blogger",
   BLOG_EMBED_MODEL: "bge-m3",
 
   // GitHub 배포 트리거 설정

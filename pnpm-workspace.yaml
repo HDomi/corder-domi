@@ -1,4 +1,5 @@
 allowBuilds:
   '@firebase/util': true
+  '@google/genai': set this to true or false
   better-sqlite3: true
   protobufjs: true

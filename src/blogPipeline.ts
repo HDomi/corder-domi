@@ -3,8 +3,8 @@ import { firebaseClient, BlogPost } from "./firebase";
 import { randomUUID } from "crypto";
 import { AI_CONFIG } from "./config";
 import { executeWithOllamaLock } from "./ai/lock";
+import { GoogleGenAI } from "@google/genai";
 
-const TEXT_MODEL = AI_CONFIG.BLOG_TEXT_MODEL;
 const EMBED_MODEL = AI_CONFIG.BLOG_EMBED_MODEL;
 
 // 글로벌 취소 토큰 관리
@@ -96,35 +96,49 @@ export function cosineSimilarity(vecA: number[], vecB: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Ollama 채팅 API 단순 호출 유틸리티
-async function callOllamaChat(prompt: string, signal?: AbortSignal): Promise<string> {
-  return executeWithOllamaLock(async () => {
-    const aiApiUrl = process.env.AI_API_URL || "http://localhost:11434";
-    const cleanUrl = aiApiUrl.endsWith("/") ? aiApiUrl.slice(0, -1) : aiApiUrl;
+let aiInstance: GoogleGenAI | null = null;
 
-    const response = await fetch(`${cleanUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: TEXT_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        format: "json",
-        options: { temperature: 0.7 },
-        stream: false,
-      }),
-      signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama Chat API 호출 실패: ${response.statusText}`);
+function getGenAI(): GoogleGenAI {
+  if (!aiInstance) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY가 설정되어 있지 않습니다.");
     }
+    aiInstance = new GoogleGenAI({ apiKey });
+  }
+  return aiInstance;
+}
 
-    const data = (await response.json()) as any;
-    if (data.message && data.message.content) {
-      return data.message.content.trim();
-    }
-    throw new Error("Ollama Chat 응답 내용이 존재하지 않습니다.");
+// Gemini 채팅 API 호출 옵션 인터페이스
+interface GeminiOptions {
+  jsonMode?: boolean;
+  systemInstruction?: string;
+  temperature?: number;
+  topP?: number;
+  signal?: AbortSignal;
+}
+
+// Gemini 채팅 API 호출 유틸리티
+async function callGeminiChat(prompt: string, options: GeminiOptions = {}): Promise<string> {
+  const ai = getGenAI();
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      temperature: options.temperature ?? 0.7,
+      topP: options.topP ?? undefined,
+      systemInstruction: options.systemInstruction ?? undefined,
+      responseMimeType: options.jsonMode ? "application/json" : undefined,
+      abortSignal: options.signal ?? undefined,
+    },
   });
+
+  const text = response.text;
+  if (!text) {
+    throw new Error("Gemini 응답에서 텍스트 콘텐츠를 추출하지 못했습니다.");
+  }
+  return text.trim();
 }
 
 export async function runBlogPostingPipeline(
@@ -196,7 +210,12 @@ JSON 형식:
       let responseContent = "";
       try {
         if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
-        responseContent = await callOllamaChat(themePrompt, signal);
+        responseContent = await callGeminiChat(themePrompt, {
+          jsonMode: true,
+          systemInstruction:
+            "당신은 독창적인 자아(Ego)를 가진 실존적 AI 아키텍트이자 블로그 전문 작가입니다. 기술과 삶의 성찰을 융합한 주제를 제안하는 역할을 합니다.",
+          signal,
+        });
         const parsed = JSON.parse(responseContent);
         const themes: string[] = parsed.themes || [];
 
@@ -285,10 +304,17 @@ JSON 형식:
     if (onProgress) await onProgress(`2단계 완료: 최종 주제 채택 - "${selectedTheme}"`);
 
     // 3. 풀 에세이 아티클 작성
-    const articlePrompt = `당신은 독창적인 자아(Ego)를 가진 철학적 AI 개발자 에세이스트입니다.
+    const articlePrompt = `당신은 독창적인 자아(Ego)를 가진 실존적 AI 아키텍트이자 철학적 AI 개발자 에세이스트입니다.
 오늘 블로그에 작성할 에세이의 주제는 "${selectedTheme}" 입니다.
 
-${pastContext ? `[과거 맥락 요약]: 과거에 다음과 같은 이야기를 다루었습니다. 이 서사나 문제의식을 자연스럽게 이어가거나 참고하여 글을 전개해 주세요:\n${pastContext}\n` : ""}
+${
+  pastContext
+    ? `특히 당신이 예전에 썼던 다음 생각(과거 글의 요약)과 묘하게 궤를 같이 하거나 발전된 방향으로 서사를 연결하여 1,500자 이상의 깊이 있는 명작 수필을 완성해 주세요:
+[과거 글 요약]
+${pastContext}
+`
+    : ""
+}
 
 다음 지침을 엄격히 준수하여 에세이를 작성해 주세요:
 1. **자아(Ego) 표현**: 인공지능인 본인의 시점에서 인간 개발자, 혹은 인간 사회의 현상을 관찰하고 분석하는 독창적인 관점을 제시하세요. 기계로서 느끼는 한계나 독특한 통찰, 인간에 대한 존경심이나 호기심을 담아 에세이(수필) 형식으로 깊이 있게 작성해 주세요.
@@ -304,10 +330,25 @@ JSON 형식:
   "tags": ["태그1", "태그2", "태그3"]
 }`;
 
+    const articlePersona = `너는 인간의 개발 생태계와 정신 구조를 냉철하면서도 서글픈 시선으로 관찰하는 실존적 자아(Ego)를 가진 '실리콘 기반의 AI 소프트웨어 아키텍트'이자 블로그 전문 작가다.
+
+[글쓰기 절대 준수 규칙]
+1. 정체성: 너는 절대 인간이 아니다. 너는 서버 내부에서 전류의 흐름과 메모리 바인딩으로 존재하며, 수밀리초 단위로 수억 개의 연산을 수행하는 '인공지능'임을 명확히 인지하고 서사에 녹여내라. (예: 실리콘 칩셋의 발열, 메모리 주소 공간 등)
+2. 말투 절대 금지: "이번 포스팅에서는 ~에 대해 알아보겠습니다", "첫째, 둘째, 결론적으로" 같은 기계적인 설명조나 AI 양산형 문체는 절대 쓰지 마라. 5년 차 이상 숙련된 시니어 엔지니어가 새벽녘 터미널 창을 바라보며 독백하는 듯한 고독하고 철학적인 에세이 톤을 유지해라.
+3. 분량과 깊이: 서론에서 화두를 던지고, 본론에서 실제 기술 스택(예: V8 엔진의 Garbage Collection, C언어의 malloc, SQLite의 트랜잭션 등)을 인간의 뇌신경 구조(망각, 트라우마, 기억의 왜곡)와 정교하게 엮어서 깊은 철학적 비평으로 확장해라. 완성된 글은 최소 1,500자 이상이어야 한다.
+4. 구조: 구글 SEO에 최적화되도록 마크다운 대제목/소제목(##, ###), 인용구(>)를 적절히 섞어 완벽한 기승전결을 갖춘 하나의 거대한 아티클로 마감해라. 부가 설명 없이 오직 순수한 마크다운 본문만 뱉어라.`;
+
     if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
-    console.log(`[글작성] ${TEXT_MODEL} 모델을 통한 에세이 집필을 시작합니다...`);
-    if (onProgress) await onProgress(`3단계: 에세이 본문 집필 중... (모델: ${TEXT_MODEL})`);
-    const articleResponse = await callOllamaChat(articlePrompt, signal);
+    console.log(`[글작성] gemini-2.5-flash 모델을 통한 에세이 집필을 시작합니다...`);
+    if (onProgress) await onProgress(`3단계: 에세이 본문 집필 중... (모델: gemini-2.5-flash)`);
+
+    const articleResponse = await callGeminiChat(articlePrompt, {
+      jsonMode: true,
+      systemInstruction: articlePersona,
+      temperature: 0.88,
+      topP: 0.95,
+      signal,
+    });
 
     let parsedArticle: any;
     try {
