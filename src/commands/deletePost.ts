@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 import { Command } from "../types";
 import { firebaseClient } from "../firebase";
+import { triggerBlogDeploy } from "../git";
 
 export const deletePost: Command = {
   data: new SlashCommandBuilder()
@@ -189,12 +190,21 @@ export const deletePost: Command = {
             // 1. Firebase 실시간 데이터베이스에서 포스트 삭제
             await firebaseClient.deletePost(uuid);
 
+            // 2. GitHub Pages 재배포 트리거
+            const deployTriggered = await triggerBlogDeploy();
+
             const successEmbed = new EmbedBuilder()
               .setTitle("🗑️ 포스트 삭제 완료")
               .setDescription(`성공적으로 포스트를 데이터베이스에서 삭제했습니다.`)
               .setColor(0x2ecc71)
               .addFields(
                 { name: "📝 제목", value: post.title },
+                {
+                  name: "🚀 정적 사이트 배포",
+                  value: deployTriggered
+                    ? "🟢 GitHub Actions 자동 배포 트리거됨 (3~5분 소요)"
+                    : "🔴 GitHub Actions 배포 트리거 실패 또는 건너뜀",
+                },
               )
               .setTimestamp();
 

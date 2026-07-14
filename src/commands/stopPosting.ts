@@ -18,7 +18,9 @@ export const stopPosting: Command = {
 
     const embed = new EmbedBuilder()
       .setTitle("⏹️ 포스팅 생성 작업 중지")
-      .setDescription("진행 중이던 AI 블로그 포스팅 생성 작업 및 Ollama 연산 호출을 강제 중단했습니다.")
+      .setDescription(
+        "진행 중이던 AI 블로그 포스팅 생성 작업 및 Ollama 연산 호출을 강제 중단했습니다.",
+      )
       .setColor(0xe74c3c) // 빨간색
       .setTimestamp();
 

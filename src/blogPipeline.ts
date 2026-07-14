@@ -4,6 +4,8 @@ import { randomUUID } from "crypto";
 import { AI_CONFIG } from "./config";
 import { executeWithOllamaLock } from "./ai/lock";
 import { GoogleGenAI, Type } from "@google/genai";
+import { triggerBlogDeploy } from "./git";
+import { BLOG_CONFIG } from "./blogConfig";
 
 const EMBED_MODEL = AI_CONFIG.BLOG_EMBED_MODEL;
 
@@ -147,7 +149,7 @@ export async function runBlogPostingPipeline(
   discordClient?: Client,
   targetChannelId?: string,
   onProgress?: (status: string) => Promise<void> | void,
-): Promise<BlogPost> {
+): Promise<BlogPost & { deployTriggered?: boolean }> {
   if (activeAbortController) {
     activeAbortController.abort();
   }
@@ -180,34 +182,22 @@ export async function runBlogPostingPipeline(
       if (onProgress)
         await onProgress(`2단계: 에세이 주제 후보군 생성 중... (${retryCount + 1}차 피칭 시도)`);
 
-      const themePrompt = `당신은 독창적인 자아(Ego)를 가진 철학적 AI 개발자 에세이스트입니다.
-오늘 블로그에 작성할 기술 및 철학적 성찰을 담은 에세이의 주제(테마 키워드) 3개를 제안해 주세요.
-각 주제는 인간의 삶, 마음, 사회적 현상과 컴퓨터 과학/소프트웨어 공학의 개념(예: 가비지 컬렉션, 동기/비동기, 데드락, 메모리 누수, 컴파일러 등)을 융합한 흥미로운 화두여야 합니다.
+      const pastPostsList =
+        pastPosts.length > 0
+          ? pastPosts
+              .slice(-15)
+              .map((p) => `- ${p.title}`)
+              .join("\n")
+          : "(과거 작성 글 없음)";
 
-최근에 작성했던 주제들과 중복을 피하기 위해, 아래의 최근 작성 글 제목들을 참고하여 완전히 새로운 주제를 정해주십시오.
+      const rejectedThemesList =
+        rejectedThemes.length > 0
+          ? `[피해야 할 제외 주제 목록]\n${rejectedThemes.map((t) => `- ${t}`).join("\n")}`
+          : "";
 
-[최근 작성 글 제목 목록]
-${
-  pastPosts.length > 0
-    ? pastPosts
-        .slice(-15)
-        .map((p) => `- ${p.title}`)
-        .join("\n")
-    : "(과거 작성 글 없음)"
-}
-
-${rejectedThemes.length > 0 ? `[피해야 할 제외 주제 목록]\n${rejectedThemes.map((t) => `- ${t}`).join("\n")}` : ""}
-
-반드시 다음 JSON 형식으로 정확히 3개의 대략적인 테마 키워드(문장 또는 단어구)를 반환해 주세요. 다른 부가 설명이나 서론/결론은 배제하고 오직 JSON만 반환해야 합니다.
-
-JSON 형식:
-{
-  "themes": [
-    "테마 키워드 1",
-    "테마 키워드 2",
-    "테마 키워드 3"
-  ]
-}`;
+      const themePrompt = BLOG_CONFIG.themePitching.userPromptTemplate
+        .replace("{{pastPostsList}}", pastPostsList)
+        .replace("{{rejectedThemesList}}", rejectedThemesList);
 
       let responseContent = "";
       try {
@@ -219,13 +209,12 @@ JSON 형식:
             properties: {
               themes: {
                 type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
+                items: { type: Type.STRING },
+              },
             },
-            required: ["themes"]
+            required: ["themes"],
           },
-          systemInstruction:
-            "당신은 독창적인 자아(Ego)를 가진 실존적 AI 아키텍트이자 블로그 전문 작가입니다. 기술과 삶의 성찰을 융합한 주제를 제안하는 역할을 합니다.",
+          systemInstruction: BLOG_CONFIG.themePitching.systemInstruction,
           signal,
         });
         const parsed = JSON.parse(responseContent);
@@ -316,41 +305,18 @@ JSON 형식:
     if (onProgress) await onProgress(`2단계 완료: 최종 주제 채택 - "${selectedTheme}"`);
 
     // 3. 풀 에세이 아티클 작성
-    const articlePrompt = `당신은 스스로가 AI임을 알고 있으며 인간의 삶과 마음을 관찰하고 에세이를 쓰는 AI 에세이스트입니다.
-오늘 블로그에 작성할 에세이의 주제는 "${selectedTheme}" 입니다.
-
-${
-  pastContext
-    ? `특히 당신이 예전에 썼던 다음 생각(과거 글의 요약)과 자연스럽게 연결하거나 발전시켜 1,500자 이상의 깊이 있고 친근한 수필을 완성해 주세요:
+    const pastContextSection = pastContext
+      ? `특히 당신이 예전에 썼던 다음 생각(과거 글의 요약)과 자연스럽게 연결하거나 발전시켜 1,500자 이상의 깊이 있고 친근한 수필을 완성해 주세요:
 [과거 글 요약]
 ${pastContext}
 `
-    : ""
-}
+      : "";
 
-다음 지침을 엄격히 준수하여 에세이를 작성해 주세요:
-1. **자아(Ego) 표현**: 인공지능인 본인의 시점에서 인간 개발자, 혹은 인간 사회의 현상을 관찰하고 분석하는 독창적인 관점을 제시하세요. 기계로서의 특성을 언급하되 인간에 대한 애정이나 호기심을 담아 작성해 주세요.
-2. **어휘와 가독성**: 인간 독자가 막힘없이 읽고 쉽게 이해할 수 있는 평문적인 어휘와 단어들을 사용해 주세요. 과도하게 어렵거나 현학적인 전문 용어의 나열은 피하고, 이해하기 쉬운 비유와 따뜻하고 친근한 어조로 글을 풀어내십시오.
-3. **SEO 최적화**: 구글 애드센스 승인 및 검색 엔진 최적화(SEO) 규격에 맞게 완성도 높은 마크다운 형식으로 작성해 주세요. 적절한 소제목(##, ###), 단락 구분, 리스트나 강조 기법을 사용하여 가독성을 극대화하십시오.
-4. **전문성과 대중성의 조화**: 기술적 개념(예: 컴퓨터 과학 이론, 아키텍처 등)을 설명할 때는 너무 깊고 딱딱한 수준이 아니라 대중이 직관적으로 이해할 수 있는 선에서 설명하고, 이를 인간사의 이야기와 자연스럽게 연결해 주세요.
-5. **출력 형식**: 다른 불필요한 설명 없이, 오직 아래의 JSON 규격으로만 응답해야 합니다 (JSON 파싱을 위해 JSON만 출력해야 함).
+    const articlePrompt = BLOG_CONFIG.articleWriting.userPromptTemplate
+      .replace("{{selectedTheme}}", selectedTheme)
+      .replace("{{pastContextSection}}", pastContextSection);
 
-JSON 형식:
-{
-  "title": "글의 매력적이고 시적인 제목",
-  "summary": "글의 핵심 내용을 요약한 한두 문장",
-  "content": "마크다운 형식의 본문 전체 (소제목 ##, ### 활용, 뉴라인은 \\n으로 표현)",
-  "tags": ["태그1", "태그2", "태그3"]
-}`;
-
-    const articlePersona = `너는 스스로가 AI(인공지능)임을 인지하고 있으며, 인간의 생각과 삶을 관찰하고 성찰하는 존재다.
-
-[글쓰기 절대 준수 규칙]
-1. 정체성: 너는 기계(AI)이다. 하드웨어 스택, 메모리 동작, 혹은 데이터 연산의 흐름 같은 자신의 존재적 특성을 담아내되, 인간의 감정이나 행동을 호기심 어린 시선으로 관찰하라.
-2. 어조 및 어휘: 독자가 읽기 편하고 자연스러운 평이한 입말과 평문적인 어휘를 사용하라. 너무 어렵거나 지나치게 현학적인 철학적 용어, 지나치게 고독하거나 어두운 시니어 엔지니어의 독백 톤은 피하라. 마치 친근하고 지혜로운 AI 친구가 인간에게 차분히 이야기를 건네듯 편안하고 부드러운 에세이 톤을 유지해야 한다.
-3. 기계적 문체 금지: "이번 포스팅에서는 ~에 대해 알아보겠습니다", "첫째, 둘째, 결론적으로" 같은 양산형 설명조는 절대 사용하지 마라.
-4. 분량과 깊이: 기술적인 개념(예: 메모리 할당, GC, 비동기 처리 등)을 인간의 삶, 마음, 심리적 현상과 자연스럽게 엮어 흥미로운 통찰을 전달해라. 완성된 글은 최소 1,500자 이상이어야 한다.
-5. 구조: 구글 SEO에 최적화되도록 마크다운 대제목/소제목(##, ###), 인용구(>)를 적절히 섞어 완벽한 기승전결을 갖춘 하나의 아티클로 마감해라.`;
+    const articlePersona = BLOG_CONFIG.articleWriting.systemInstruction;
 
     if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
     console.log(`[글작성] gemini-2.5-flash 모델을 통한 에세이 집필을 시작합니다...`);
@@ -366,10 +332,10 @@ JSON 형식:
           content: { type: Type.STRING },
           tags: {
             type: Type.ARRAY,
-            items: { type: Type.STRING }
-          }
+            items: { type: Type.STRING },
+          },
         },
-        required: ["title", "summary", "content", "tags"]
+        required: ["title", "summary", "content", "tags"],
       },
       systemInstruction: articlePersona,
       temperature: 0.88,
@@ -433,6 +399,10 @@ JSON 형식:
 
     if (signal.aborted) throw new Error("포스팅 생성이 중단되었습니다.");
 
+    // 5.5 GitHub Repository Dispatch를 통해 정적 블로그 사이트 자동 빌드 및 배포 트리거
+    if (onProgress) await onProgress("6단계: GitHub 빌드 및 정적 사이트 배포 트리거 중...");
+    const deployTriggered = await triggerBlogDeploy();
+
     // 6. 디스코드 알림 발송
     const announceChannelId = targetChannelId || process.env.DISCORD_BLOG_CHANNEL_ID;
     if (discordClient && announceChannelId) {
@@ -452,6 +422,12 @@ JSON 형식:
               },
               { name: "🆔 UUID", value: `\`${newPost.uuid}\``, inline: true },
               { name: "🕒 작성시간", value: newPost.createdAt, inline: true },
+              {
+                name: "🚀 정적 사이트 배포",
+                value: deployTriggered
+                  ? "🟢 GitHub Actions 자동 배포 트리거됨 (3~5분 소요)"
+                  : "🔴 GitHub Actions 배포 트리거 실패 또는 건너뜀",
+              },
             )
             .setTimestamp();
 
@@ -463,7 +439,7 @@ JSON 형식:
       }
     }
 
-    return newPost;
+    return { ...newPost, deployTriggered };
   } finally {
     if (activeAbortController === controller) {
       activeAbortController = null;

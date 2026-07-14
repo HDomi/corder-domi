@@ -29,7 +29,9 @@ export const posting: Command = {
 
       const progressEmbed = new EmbedBuilder()
         .setTitle("🔄 AI 블로그 포스팅 생성 중...")
-        .setDescription("포스팅 생성 작업을 수행하고 있습니다.")
+        .setDescription(
+          "포스팅 생성 작업을 수행하고 있습니다. 완료 시 정적 블로그 빌드가 함께 시작됩니다.",
+        )
         .setColor(0x3498db) // 파란색
         .addFields(
           { name: "📋 현재 단계", value: currentStatus },
@@ -74,6 +76,12 @@ export const posting: Command = {
           { name: "🏷️ 태그", value: Object.keys(post.tags).join(", ") || "(태그 없음)" },
           { name: "🆔 UUID", value: `\`${post.uuid}\``, inline: true },
           { name: "🕒 작성시간", value: post.createdAt, inline: true },
+          {
+            name: "🚀 정적 사이트 배포",
+            value: post.deployTriggered
+              ? "🟢 GitHub Actions 자동 배포 트리거됨 (3~5분 소요)"
+              : "🔴 GitHub Actions 배포 트리거 실패 또는 건너뜀",
+          },
           { name: "⏱️ 총 소요 시간", value: formatElapsed(totalTime), inline: true },
         )
         .setTimestamp();

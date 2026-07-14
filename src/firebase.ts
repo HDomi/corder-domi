@@ -91,6 +91,28 @@ export const firebaseClient = {
   },
 
   /**
+   * 최근 자동 포스팅이 실행된 날짜를 가져옵니다.
+   * 경로: config/lastAutoPostingDate
+   */
+  async getLastAutoPostingDate(): Promise<string | null> {
+    try {
+      const snapshot = await db.ref("config/lastAutoPostingDate").once("value");
+      return snapshot.val();
+    } catch (error) {
+      console.error("⚠️ Firebase 최근 자동 포스팅 날짜 조회 중 오류 발생:", error);
+      return null;
+    }
+  },
+
+  /**
+   * 최근 자동 포스팅이 실행된 날짜를 업데이트합니다.
+   * 경로: config/lastAutoPostingDate
+   */
+  async setLastAutoPostingDate(dateStr: string): Promise<void> {
+    await db.ref("config/lastAutoPostingDate").set(dateStr);
+  },
+
+  /**
    * 모든 블로그 포스트를 가져옵니다.
    * 경로: posts
    */
